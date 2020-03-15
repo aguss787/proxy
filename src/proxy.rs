@@ -1,5 +1,6 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 
+use crate::bucket;
 use futures_util::future::try_join;
 use hyper::upgrade::Upgraded;
 use hyper::{http, Body, Client, Method, Request, Response};
@@ -7,7 +8,14 @@ use tokio::net::TcpStream;
 
 type HttpClient = Client<hyper::client::HttpConnector>;
 
-pub async fn proxy(client: HttpClient, req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+pub async fn handle(
+    client: HttpClient,
+    limiter: bucket::Bucket,
+    req: Request<Body>,
+) -> Result<Response<Body>, hyper::Error> {
+    let mut limiter = limiter;
+    limiter.request().await;
+
     println!("req: {:?}", req);
 
     if Method::CONNECT == req.method() {
@@ -28,7 +36,7 @@ pub async fn proxy(client: HttpClient, req: Request<Body>) -> Result<Response<Bo
             tokio::task::spawn(async move {
                 match req.into_body().on_upgrade().await {
                     Ok(upgraded) => {
-                        if let Err(e) = tunnel(upgraded, addr).await {
+                        if let Err(e) = tunnel(limiter, upgraded, addr).await {
                             eprintln!("server io error: {}", e);
                         };
                     }
@@ -57,7 +65,11 @@ fn host_addr(uri: &http::Uri) -> Option<SocketAddr> {
 
 // Create a TCP connection to host:port, build a tunnel between the connection and
 // the upgraded connection
-async fn tunnel(upgraded: Upgraded, addr: SocketAddr) -> std::io::Result<()> {
+async fn tunnel(
+    limiter: bucket::Bucket,
+    upgraded: Upgraded,
+    addr: SocketAddr,
+) -> std::io::Result<()> {
     // Connect to remote server
     let mut server = TcpStream::connect(addr).await?;
 
@@ -76,8 +88,8 @@ async fn tunnel(upgraded: Upgraded, addr: SocketAddr) -> std::io::Result<()> {
     match amounts {
         Ok((from_client, from_server)) => {
             println!(
-                "client wrote {} bytes and received {} bytes",
-                from_client, from_server
+                "client wrote {} bytes and received {} bytes [{:?}]",
+                from_client, from_server, limiter.id
             );
         }
         Err(e) => {

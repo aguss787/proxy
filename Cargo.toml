@@ -10,3 +10,4 @@ edition = "2018"
 hyper = "0.13.3"
 tokio = { version = "0.2.13", features = ["full"] }
 futures-util = "0.3.4"
+backtrace = "0.3.45"
